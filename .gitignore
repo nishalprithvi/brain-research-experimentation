@@ -1,0 +1,33 @@
+# --- Python & Environment ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# --- IDE Settings ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- Project Data & Models ---
+data/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.pkl
+results/
+results_guidance/
+job_logs/
+metrics_graphs/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# --- Explicitly Keep Critical Files ---
+!test_indices.npy
