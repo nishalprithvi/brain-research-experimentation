@@ -50,6 +50,33 @@ We have identified the following optimal hyperparameters through sensitivity ana
 -   **Loss**: CrossEntropy (Unweighted, balanced via sampling)
 -   **Evaluation**: Stratified Split (80% Train / 20% Test) on **Real Data Only**.
 
+## 5. Usage & Execution
+
+### 5.1 Training the Full Pipeline
+To replicate the entire experiment (Generation → Filtering → Pre-training → Fine-tuning), run the master shell script:
+
+```bash
+# Ensure you are in the experimentation directory
+bash run_full_pipeline.sh
+```
+
+This script will:
+1.  **Generate** 2,500 synthetic AD samples using the Diffusion Model.
+2.  **Filter** them for quality and uniqueness.
+3.  **Pre-train** the GCN encoder using Contrastive Learning (100 epochs).
+4.  **Fine-tune** the classifier on the balanced dataset (50 epochs).
+
+### 5.2 Observing Results
+Artifacts and logs are saved in the following locations:
+
+-   **Logs**: Check `job_logs/pipeline_YYYYMMDD_HHMMSS.log` for real-time progress and metrics.
+-   **Synthetic Data**:
+    -   `results_guidance/synthetic_hard_negatives.bin`: Raw generated samples.
+    -   `results_guidance/filtered_synthetic.bin`: High-quality filtered samples used for training.
+-   **Model Checkpoints**:
+    -   `gcn_pretrained_contrastive.pth`: The pre-trained encoder.
+    -   `gcn_finetuned.pth`: The final classifier.
+
 ---
 
 # Research Progress Report: Graph Contrastive Learning for AD Classification
