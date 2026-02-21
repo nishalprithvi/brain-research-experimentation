@@ -77,6 +77,31 @@ Artifacts and logs are saved in the following locations:
     -   `gcn_pretrained_contrastive.pth`: The pre-trained encoder.
     -   `gcn_finetuned.pth`: The final classifier.
 
+### 5.3 Reproducibility & Frozen Evaluation
+To ensure consistent results and optimize resource usage, we have implemented a **Fixed Seed** and **Frozen Data** workflow.
+
+**Global Seeding**
+All random operations (Torch, NumPy, Python) are now deterministic. You can set the seed via the CLI:
+```bash
+python main.py guide --seed 42 ...
+```
+
+**Finding the Best Synthetic Data**
+Expected variance in the generative process means some synthetic datasets perform better than others. To find the optimal seed:
+```bash
+# Submits a batch job to test seeds [42, 100, 2024, 12345, 999]
+# Output: seed_search_results.txt
+sbatch find_best_seed.sh
+```
+
+**Running the Frozen Pipeline**
+Once you have identified the best seed (e.g., Seed 12345), you can **freeze** that dataset and run future experiments (like ablation studies) without regenerating data. This ensures fair comparison and saves GPU time.
+```bash
+# Usage: sbatch run_frozen_pipeline.sh <PATH_TO_BEST_SYNTHETIC_DATA> <SEED>
+sbatch run_frozen_pipeline.sh ./results_guidance/filtered_synthetic_seed_12345.bin 12345
+```
+*Note: This script is optimized for the MGPU-TC2 partition with a **6-hour time limit**.*
+
 ---
 
 # Research Progress Report: Graph Contrastive Learning for AD Classification
