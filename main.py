@@ -13,9 +13,14 @@ from src.retrain_standard_gcn import train_standard_gcn
 from src.filter_synthetic import filter_synthetic_data
 from src.train_contrastive import train_contrastive
 from src.finetune import train_finetune
+from src.utils import set_seed
 
 def main():
     parser = argparse.ArgumentParser(description="Brain Network Classification Experimentation CLI")
+    
+    # Global Seed Argument
+    parser.add_argument('--seed', type=int, default=42, help='Global random seed for reproducibility')
+    
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
     # Train Command
@@ -54,6 +59,7 @@ def main():
     ft_parser = subparsers.add_parser("finetune", help="Fine-tune GCN on Real Data")
     ft_parser.add_argument('--epochs', type=int, default=50, help='Fine-tuning epochs')
     ft_parser.add_argument('--unfreeze', action='store_true', help='Unfreeze encoder weights')
+    ft_parser.add_argument('--syn_path', type=str, default='./results_guidance/filtered_synthetic.bin', help='Path to synthetic data')
     
     # Experiment Command (Run All)
     exp_parser = subparsers.add_parser("run_all", help="Run full pipeline: Train -> Validate")
@@ -63,6 +69,9 @@ def main():
     exp_parser.add_argument('--n_samples', type=int, default=10)
     
     args = parser.parse_args()
+    
+    # Set Seed Globally
+    set_seed(args.seed)
     
     if args.command == "train":
         print("--- Starting Training ---")
@@ -91,7 +100,7 @@ def main():
         train_contrastive(epochs=args.epochs, syn_path=args.syn_path)
     elif args.command == "finetune":
         print("--- Starting Fine-Tuning ---")
-        train_finetune(epochs=args.epochs, frozen=not args.unfreeze)
+        train_finetune(epochs=args.epochs, frozen=not args.unfreeze, syn_path=args.syn_path)
     elif args.command == "run_all":
         print("--- Starting Full Experiment ---")
         run_training(args)

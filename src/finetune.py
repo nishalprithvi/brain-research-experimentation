@@ -27,7 +27,7 @@ class FineTunedGCN(nn.Module):
         logits = self.classifier(h)
         return logits
 
-def train_finetune(epochs=50, batch_size=32, frozen=True):
+def train_finetune(epochs=50, batch_size=32, frozen=True, syn_path='./results_guidance/filtered_synthetic.bin'):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
@@ -85,7 +85,7 @@ def train_finetune(epochs=50, batch_size=32, frozen=True):
     
     if USE_SYNTHETIC:
         # Load Synthetic Data
-        syn_path = './results_guidance/filtered_synthetic.bin'
+        # syn_path is passed as argument
         if os.path.exists(syn_path):
             print(f"Loading Synthetic Data from {syn_path}...")
             glist_syn, _ = load_graphs(syn_path)
