@@ -31,3 +31,9 @@ metrics_graphs/
 
 # --- Explicitly Keep Critical Files ---
 !test_indices.npy
+project_documentation.tex
+project_documentation.pdf
+project_documentation.aux
+project_documentation.log
+project_documentation.out
+project_documentation.toc
