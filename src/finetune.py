@@ -52,7 +52,6 @@ def train_finetune(epochs=50, batch_size=32, frozen=True, syn_path='./results_gu
         elif 'feat' in g.edata: weights = g.edata['feat']
         else: weights = torch.ones(g.num_edges())
         if weights.dim() == 1: weights = weights.view(-1, 1)
-        # Clear and set
         keys = list(g.edata.keys())
         for k in keys: del g.edata[k]
         g.edata['feat'] = weights
