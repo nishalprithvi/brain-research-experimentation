@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
 .venv/
 venv/
 env/
@@ -11,23 +16,55 @@ env/
 .vscode/
 .idea/
 *.swp
+*.swo
 .DS_Store
 
 # --- Project Data & Models ---
 data/
+datasets/
 *.pth
 *.pt
 *.ckpt
 *.h5
 *.pkl
+*.bin
+*.onnx
+*.safetensors
+*.npy
+*.npz
+
+# --- Results, Logs, & Reports ---
 results/
-results_guidance/
+results*/
 job_logs/
 metrics_graphs/
+logs/
+*.log
+*.out
+*.err
+*results*.txt
 
 # --- Notebooks ---
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
 
+# --- LaTeX Build Files ---
+*.aux
+*.bbl
+*.blg
+*.fls
+*.toc
+*.fdb_latexmk
+*.synctex.gz
+
+# --- Large Binaries & Miscellaneous ---
+tectonic/
+tectonic
+
 # --- Explicitly Keep Critical Files ---
 !test_indices.npy
+!test_indices_3class.npy
+!requirements.txt
+!readme.md
+project_documentation.tex
+project_documentation.pdf

@@ -8,7 +8,7 @@ import os
 import argparse
 from dgl.data.utils import load_graphs
 from src.standard_gcn import StandardGCN
-from src.data_loader import load_adni_dgl_with_labels
+from src.data_loader_3class import load_adni_dgl_with_labels
 
 
 class SimCLR(nn.Module):
@@ -110,7 +110,7 @@ def collate_cl(graphs):
     batch2 = dgl.batch(view2)
     return batch1, batch2
 
-def train_contrastive(epochs=100, batch_size=32, syn_path='./results_guidance/filtered_synthetic.bin'):
+def train_contrastive(epochs=100, batch_size=32, syn_dir='./results_guidance_3class'):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
@@ -165,10 +165,15 @@ def train_contrastive(epochs=100, batch_size=32, syn_path='./results_guidance/fi
     # --- BASELINE VERIFICATION: DISABLE SYNTHETIC DATA ---
     USE_SYNTHETIC = True # Re-enabled after switching to LayerNorm
     
-    if USE_SYNTHETIC and os.path.exists(syn_path):
-        print(f"Loading Synthetic Data from {syn_path}...")
-        glist_syn, _ = load_graphs(syn_path)
-        glist_syn = sanitize(glist_syn)
+    if USE_SYNTHETIC:
+        for cls_name in ['ad', 'mci']:
+            syn_path = os.path.join(syn_dir, f'filtered_synthetic_{cls_name}.bin')
+            if os.path.exists(syn_path):
+                print(f"Loading Synthetic Data from {syn_path}...")
+                glist_tmp, _ = load_graphs(syn_path)
+                glist_syn.extend(sanitize(glist_tmp))
+            else:
+                print(f"Warning: Synthetic Data not found at {syn_path}")
     else:
         print("[CONFIG] Synthetic Data DISABLED for Pre-Training (Baseline Verification).")
         
@@ -241,13 +246,12 @@ def train_contrastive(epochs=100, batch_size=32, syn_path='./results_guidance/fi
             print(f"Epoch {epoch+1}/{epochs} | Contrastive Loss: {avg_loss:.4f}")
             
     # Save Encoder Only
-    torch.save(model.encoder.state_dict(), 'gcn_pretrained_contrastive.pth')
-    print("Saved Pre-Trained Encoder to gcn_pretrained_contrastive.pth")
+    torch.save(model.encoder.state_dict(), 'gcn_pretrained_3class.pth')
+    print("Saved Pre-Trained Encoder to gcn_pretrained_3class.pth")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--syn_path', type=str, default='./results_guidance/filtered_synthetic.bin')
     parser.add_argument('--epochs', type=int, default=100)
     args = parser.parse_args()
     
-    train_contrastive(epochs=args.epochs, syn_path=args.syn_path)
+    train_contrastive(epochs=args.epochs)
