@@ -20,6 +20,7 @@ EPOCHS_VAE=${2:-50}
 EPOCHS_DIFF=${3:-100}
 EPOCHS_GCN=${4:-100}
 BATCH_SIZE=${5:-16}
+TEACHER_MODEL=${6:-latent_densegcn}
 
 LOG_DIR="./job_logs"
 mkdir -p "$LOG_DIR"
@@ -37,10 +38,15 @@ for seed in ${SEEDS//,/ }; do
     --epochs_diff "$EPOCHS_DIFF" \
     --epochs_gcn "$EPOCHS_GCN" \
     --batch_size "$BATCH_SIZE" \
+    --teacher_model_type "$TEACHER_MODEL" \
+    --vae_aux_cls_weight 0.20 \
     --quality_eval_every 5 \
     --phase1_quality_dir ./results_phase1_quality \
     --diffusion_num_buckets 10 \
-    --teacher_class_weight_mode inverse \
+    --teacher_class_weight_mode sqrt_inverse \
+    --teacher_loss_mode class_balanced_ce \
+    --teacher_max_class_weight 2.0 \
+    --teacher_collapse_reg 0.20 \
     --teacher_early_stop_patience 20 2>&1 | tee -a "$RUN_LOG"
 
   LAST_QUALITY_DIR=$(ls -1dt ./results_phase1_quality/phase1_*_seed_${seed} 2>/dev/null | head -n 1)

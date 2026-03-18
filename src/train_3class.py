@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from src.data_loader_3class import load_adni_data
 from src.diffusion_model import DiffusionUNet
-from src.gcn_model import LatentDenseGCN
+from src.gcn_model import LatentDenseGCN, LatentMLPTeacher
 from src.vae_model import VAE
 
 
@@ -136,13 +136,13 @@ def _latent_stats(vae, train_loader, val_loader, device):
     with torch.no_grad():
         for x, y in train_loader:
             x = x.float().to(device)
-            _, _, _, z = vae(x)
-            train_lat.append(z.view(z.shape[0], -1).cpu().numpy())
+            _, mu, _, _ = vae(x)
+            train_lat.append(mu.view(mu.shape[0], -1).cpu().numpy())
             train_lab.append(y.numpy())
         for x, y in val_loader:
             x = x.float().to(device)
-            _, _, _, z = vae(x)
-            val_lat.append(z.view(z.shape[0], -1).cpu().numpy())
+            _, mu, _, _ = vae(x)
+            val_lat.append(mu.view(mu.shape[0], -1).cpu().numpy())
             val_lab.append(y.numpy())
 
     train_lat = np.concatenate(train_lat, axis=0)
@@ -181,24 +181,40 @@ def train_vae(
     val_loader,
     epochs=50,
     eval_every=5,
+    aux_cls_weight=0.0,
     device="cpu",
 ):
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    aux_head = nn.Linear(256, 3).to(device) if aux_cls_weight > 0 else None
+    params = list(model.parameters()) + (list(aux_head.parameters()) if aux_head is not None else [])
+    optimizer = optim.Adam(params, lr=1e-3)
     metrics = []
     prev_val_cov = None
+    aux_criterion = None
+    if aux_head is not None:
+        train_labels = train_loader.dataset.tensors[1].cpu().numpy()
+        dist = {int(c): int((train_labels == c).sum()) for c in np.unique(train_labels)}
+        class_w = _class_weights_from_distribution(dist, mode="sqrt_inverse").to(device)
+        class_w = torch.clamp(class_w, max=2.0)
+        aux_criterion = nn.CrossEntropyLoss(weight=class_w)
+        print(f"[VAE] Aux latent classifier enabled (weight={aux_cls_weight}, class_w={class_w})")
 
     print(f"\n[VAE] Starting Training for {epochs} epochs...")
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
 
-        for x, _ in train_loader:
+        for x, y in train_loader:
             x = x.float().to(device)
+            y = y.long().to(device)
             optimizer.zero_grad()
             recon, mu, logvar, _ = model(x)
             recon_loss = F.mse_loss(recon, x.unsqueeze(1), reduction="sum")
             kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
             loss = recon_loss + kld_loss
+            if aux_head is not None:
+                aux_logits = aux_head(mu.view(mu.shape[0], -1))
+                aux_loss = aux_criterion(aux_logits, y)
+                loss = loss + aux_cls_weight * aux_loss * x.shape[0]
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -329,6 +345,8 @@ def _class_weights_from_distribution(dist, mode, beta=0.999):
             eff_num = 1.0 - (beta ** n_c)
             w = (1.0 - beta) / max(eff_num, 1e-12)
             weights.append(w)
+        elif mode == "sqrt_inverse":
+            weights.append(1.0 / np.sqrt(float(n_c)))
         else:
             weights.append(1.0 / float(n_c))
     weights = np.array(weights, dtype=np.float32)
@@ -356,7 +374,11 @@ def train_latent_gcn(
     train_loader,
     val_loader,
     epochs=100,
-    class_weight_mode="inverse",
+    class_weight_mode="none",
+    use_balanced_sampler=False,
+    loss_mode="ce",
+    max_class_weight=0.0,
+    collapse_reg_strength=0.05,
     early_stop_patience=20,
     device="cpu",
 ):
@@ -368,8 +390,10 @@ def train_latent_gcn(
         with torch.no_grad():
             for x, y in loader:
                 x = x.float().to(device)
-                _, _, _, z = vae(x)
-                latents.append(z.cpu())
+                # Use deterministic mean-latent (mu) for teacher training stability.
+                # Stochastic z increases class overlap and can cause collapse.
+                _, mu, _, _ = vae(x)
+                latents.append(mu.view(-1, 1, 16, 16).cpu())
                 labels.append(y.cpu())
         return torch.cat(latents, dim=0), torch.cat(labels, dim=0)
 
@@ -383,24 +407,35 @@ def train_latent_gcn(
     train_ds = TensorDataset(X_train.to(device), y_train.to(device))
     val_ds = TensorDataset(X_val.to(device), y_val.to(device))
 
-    sample_weights = []
-    for y_item in y_train.tolist():
-        sample_weights.append(1.0 / max(dist.get(int(y_item), 1), 1))
-    sample_weights = torch.tensor(sample_weights, dtype=torch.double)
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True,
-    )
-
-    train_loader_lat = DataLoader(train_ds, batch_size=16, sampler=sampler)
+    if use_balanced_sampler:
+        sample_weights = []
+        for y_item in y_train.tolist():
+            sample_weights.append(1.0 / max(dist.get(int(y_item), 1), 1))
+        sample_weights = torch.tensor(sample_weights, dtype=torch.double)
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        train_loader_lat = DataLoader(train_ds, batch_size=16, sampler=sampler)
+        print("[Latent GCN] Balanced sampler: enabled")
+    else:
+        train_loader_lat = DataLoader(train_ds, batch_size=16, shuffle=True)
+        print("[Latent GCN] Balanced sampler: disabled")
     val_loader_lat = DataLoader(val_ds, batch_size=16, shuffle=False)
 
-    weights = _class_weights_from_distribution(dist, class_weight_mode).to(device)
-    print(f"[Latent GCN] Using class weights ({class_weight_mode}): {weights}")
+    weights = None
+    if class_weight_mode != "none":
+        weights = _class_weights_from_distribution(dist, class_weight_mode).to(device)
+        if max_class_weight > 0:
+            weights = torch.clamp(weights, max=max_class_weight)
+        print(f"[Latent GCN] Using class weights ({class_weight_mode}): {weights}")
+    else:
+        print("[Latent GCN] Using class weights: none")
+    print(f"[Latent GCN] Loss mode: {loss_mode}")
 
     optimizer = optim.Adam(gcn.parameters(), lr=0.001, weight_decay=5e-4)
-    criterion = nn.CrossEntropyLoss(weight=weights)
+    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.05, reduction="none")
 
     best_macro_f1 = -1.0
     best_epoch = -1
@@ -416,7 +451,22 @@ def train_latent_gcn(
         for xb, yb in train_loader_lat:
             optimizer.zero_grad()
             outputs = gcn(xb)
-            loss = criterion(outputs, yb)
+            ce_per_sample = criterion(outputs, yb)
+            if loss_mode == "class_balanced_ce":
+                class_losses = []
+                for c in [0, 1, 2]:
+                    mask = (yb == c)
+                    if torch.any(mask):
+                        class_losses.append(ce_per_sample[mask].mean())
+                ce_loss = torch.stack(class_losses).mean() if class_losses else ce_per_sample.mean()
+            else:
+                ce_loss = ce_per_sample.mean()
+            probs = torch.softmax(outputs, dim=1)
+            mean_probs = probs.mean(dim=0)
+            # Anti-collapse regularizer: encourage non-degenerate class usage.
+            # Keeps optimization honest without changing task labels.
+            reg = torch.sum(mean_probs * torch.log(mean_probs * 3.0 + 1e-8))
+            loss = ce_loss + collapse_reg_strength * reg
             loss.backward()
             optimizer.step()
             total_loss += float(loss.item())
@@ -566,9 +616,15 @@ def run_training(args):
         "epochs_diff": args.epochs_diff,
         "epochs_gcn": args.epochs_gcn,
         "batch_size": args.batch_size,
+        "vae_aux_cls_weight": float(args.vae_aux_cls_weight),
         "quality_eval_every": args.quality_eval_every,
         "diffusion_num_buckets": args.diffusion_num_buckets,
+        "teacher_model_type": args.teacher_model_type,
         "teacher_class_weight_mode": args.teacher_class_weight_mode,
+        "teacher_use_balanced_sampler": bool(args.teacher_use_balanced_sampler),
+        "teacher_loss_mode": args.teacher_loss_mode,
+        "teacher_max_class_weight": float(args.teacher_max_class_weight),
+        "teacher_collapse_reg": float(args.teacher_collapse_reg),
         "teacher_early_stop_patience": args.teacher_early_stop_patience,
         "num_samples": int(len(labels)),
         "num_train": int(len(train_idx)),
@@ -587,6 +643,7 @@ def run_training(args):
         val_loader,
         epochs=args.epochs_vae,
         eval_every=args.quality_eval_every,
+        aux_cls_weight=args.vae_aux_cls_weight,
         device=device,
     )
     torch.save(vae.state_dict(), "vae_3class.pth")
@@ -604,7 +661,10 @@ def run_training(args):
     torch.save(unet.state_dict(), "diffusion_3class.pth")
 
     # 3. Train Latent Dense GCN teacher + quality
-    gcn = LatentDenseGCN(num_nodes=16, in_features=16, hidden_dim=32, n_classes=3).to(device)
+    if args.teacher_model_type == "latent_mlp":
+        gcn = LatentMLPTeacher(latent_dim=256, hidden_dim=128, n_classes=3, dropout=0.2).to(device)
+    else:
+        gcn = LatentDenseGCN(num_nodes=16, in_features=16, hidden_dim=32, n_classes=3).to(device)
     gcn, teacher_metrics, teacher_best = train_latent_gcn(
         gcn,
         vae,
@@ -612,6 +672,10 @@ def run_training(args):
         val_loader,
         epochs=args.epochs_gcn,
         class_weight_mode=args.teacher_class_weight_mode,
+        use_balanced_sampler=args.teacher_use_balanced_sampler,
+        loss_mode=args.teacher_loss_mode,
+        max_class_weight=args.teacher_max_class_weight,
+        collapse_reg_strength=args.teacher_collapse_reg,
         early_stop_patience=args.teacher_early_stop_patience,
         device=device,
     )
@@ -655,15 +719,31 @@ def main():
     parser.add_argument("--epochs_diff", type=int, default=100)
     parser.add_argument("--epochs_gcn", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--vae_aux_cls_weight", type=float, default=0.0)
     parser.add_argument("--quality_eval_every", type=int, default=5)
     parser.add_argument("--phase1_quality_dir", type=str, default="./results_phase1_quality")
     parser.add_argument("--diffusion_num_buckets", type=int, default=10)
     parser.add_argument(
+        "--teacher_model_type",
+        type=str,
+        default="latent_densegcn",
+        choices=["latent_densegcn", "latent_mlp"],
+    )
+    parser.add_argument(
         "--teacher_class_weight_mode",
         type=str,
-        default="inverse",
-        choices=["inverse", "effective"],
+        default="none",
+        choices=["none", "inverse", "sqrt_inverse", "effective"],
     )
+    parser.add_argument("--teacher_use_balanced_sampler", action="store_true")
+    parser.add_argument(
+        "--teacher_loss_mode",
+        type=str,
+        default="ce",
+        choices=["ce", "class_balanced_ce"],
+    )
+    parser.add_argument("--teacher_max_class_weight", type=float, default=0.0)
+    parser.add_argument("--teacher_collapse_reg", type=float, default=0.05)
     parser.add_argument("--teacher_early_stop_patience", type=int, default=20)
     parser.add_argument("--seed", type=int, default=100)
     args = parser.parse_args()

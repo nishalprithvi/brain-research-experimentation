@@ -22,15 +22,22 @@ def main():
     train_parser.add_argument('--epochs_diff', type=int, default=100)
     train_parser.add_argument('--epochs_gcn', type=int, default=100)
     train_parser.add_argument('--batch_size', type=int, default=16)
+    train_parser.add_argument('--vae_aux_cls_weight', type=float, default=0.0, help='Weight for optional supervised latent classification loss during VAE training')
     train_parser.add_argument('--quality_eval_every', type=int, default=5, help='Evaluate phase-1 quality metrics every N epochs')
     train_parser.add_argument('--phase1_quality_dir', type=str, default='./results_phase1_quality', help='Directory to store phase-1 quality outputs')
     train_parser.add_argument('--diffusion_num_buckets', type=int, default=10, help='Number of timestep buckets for diffusion quality checks')
-    train_parser.add_argument('--teacher_class_weight_mode', type=str, default='inverse', choices=['inverse', 'effective'], help='Class weighting mode for LatentDenseGCN teacher')
+    train_parser.add_argument('--teacher_model_type', type=str, default='latent_densegcn', choices=['latent_densegcn', 'latent_mlp'], help='Teacher model used in phase-1')
+    train_parser.add_argument('--teacher_class_weight_mode', type=str, default='sqrt_inverse', choices=['none', 'inverse', 'sqrt_inverse', 'effective'], help='Class weighting mode for LatentDenseGCN teacher')
+    train_parser.add_argument('--teacher_use_balanced_sampler', action='store_true', help='Enable class-balanced WeightedRandomSampler for LatentDenseGCN teacher')
+    train_parser.add_argument('--teacher_loss_mode', type=str, default='ce', choices=['ce', 'class_balanced_ce'], help='Loss mode for LatentDenseGCN teacher')
+    train_parser.add_argument('--teacher_max_class_weight', type=float, default=0.0, help='If >0, cap teacher class weights to this maximum value')
+    train_parser.add_argument('--teacher_collapse_reg', type=float, default=0.05, help='Strength of anti-collapse regularizer on mean class probabilities')
     train_parser.add_argument('--teacher_early_stop_patience', type=int, default=20, help='Early stopping patience (epochs) based on teacher macro-F1')
     
     # Guide Command
     guide_parser = subparsers.add_parser("guide", help="Phase 2: Generate Hard Negatives")
     guide_parser.add_argument('--scale', type=float, default=2.0)
+    guide_parser.add_argument('--teacher_model_type', type=str, default='latent_densegcn', choices=['latent_densegcn', 'latent_mlp'], help='Teacher model for guidance in phase-2')
     
     # Filter Command
     filter_parser = subparsers.add_parser("filter", help="Phase 3: Filter synthetic data")
@@ -45,6 +52,10 @@ def main():
     ft_parser = subparsers.add_parser("finetune", help="Phase 5: Fine-tune Multi-class GCN")
     ft_parser.add_argument('--epochs', type=int, default=50)
     ft_parser.add_argument('--unfreeze', action='store_true')
+    ft_parser.add_argument('--max_syn_ad', type=int, default=100)
+    ft_parser.add_argument('--max_syn_mci', type=int, default=100)
+    ft_parser.add_argument('--loss_class_weight_mode', type=str, default='none', choices=['none', 'inverse', 'sqrt_inverse', 'effective'])
+    ft_parser.add_argument('--label_smoothing', type=float, default=0.0)
     
     args = parser.parse_args()
     
@@ -60,7 +71,7 @@ def main():
         print("--- Starting Phase 2: Guided Generation ---")
         # Since guided_sampling_3class handles argparse internally in `main`, we bypass it 
         # by calling the script. We'll simply construct sys.argv.
-        sys.argv = ['guided_sampling_3class.py', '--scale', str(args.scale)]
+        sys.argv = ['guided_sampling_3class.py', '--scale', str(args.scale), '--teacher_model_type', str(args.teacher_model_type)]
         run_guided_sampling()
     elif args.command == "filter":
         print("--- Starting Phase 3: Filtering ---")
@@ -71,7 +82,14 @@ def main():
         train_contrastive(epochs=args.epochs)
     elif args.command == "finetune":
         print("--- Starting Phase 5: Fine-Tuning ---")
-        train_finetune(epochs=args.epochs, frozen=not args.unfreeze)
+        train_finetune(
+            epochs=args.epochs,
+            frozen=not args.unfreeze,
+            max_syn_ad=args.max_syn_ad,
+            max_syn_mci=args.max_syn_mci,
+            loss_class_weight_mode=args.loss_class_weight_mode,
+            label_smoothing=args.label_smoothing,
+        )
     else:
         parser.print_help()
 

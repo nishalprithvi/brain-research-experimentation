@@ -27,6 +27,10 @@ class LatentDenseGCN(nn.Module):
         # Option 2: The diagonal of z?
         # Let's learn a feature embedding for each of the 16 nodes.
         self.node_embedding = nn.Parameter(torch.randn(num_nodes, in_features))
+        # If in_features != num_nodes, project adjacency-row features to in_features.
+        self.struct_proj = nn.Linear(num_nodes, in_features)
+        # Blend factor between learned static embedding and sample-conditioned structural features.
+        self.alpha = nn.Parameter(torch.tensor(0.5))
         
         # GCN Layers
         # Layer 1
@@ -50,12 +54,17 @@ class LatentDenseGCN(nn.Module):
         # 1. Prepare Adjacency A
         # z is (B, 1, 16, 16). Squeeze to (B, 16, 16).
         z_sq = z.squeeze(1)
-        A = torch.sigmoid(z_sq) # Ensure non-negative and bounded [0, 1]
+        # Preserve latent variation: sigmoid can collapse values near 0.5 when mu is near 0.
+        # Use magnitude and per-sample normalization to keep structural differences informative.
+        A = torch.abs(z_sq)
         
         # Enforce symmetry? Brain matrices are symmetric.
         # z might not be perfectly symmetric coming from VAE encoder, but should be close.
         # For graph theory, A should be symmetric.
         A = (A + A.transpose(1, 2)) / 2
+        a_min = A.amin(dim=(1, 2), keepdim=True)
+        a_max = A.amax(dim=(1, 2), keepdim=True)
+        A = (A - a_min) / (a_max - a_min + 1e-6)
         
         # Normalize A? (D^-0.5 A D^-0.5) or just raw weights?
         # For simple dense GCN, standard A is fine, but self-loops help.
@@ -77,9 +86,16 @@ class LatentDenseGCN(nn.Module):
         norm_A = torch.bmm(torch.bmm(D_mat, A_hat), D_mat)
         
         # 2. Graph Convolution
-        # X is constant (Node Embeddings): (16, in_features) -> expand to (B, 16, in_features)
+        # Build sample-conditioned node features from adjacency rows.
+        # This gives each sample-specific structural context and avoids collapse
+        # caused by purely static node embeddings.
         batch_size = z.shape[0]
-        X = self.node_embedding.expand(batch_size, -1, -1)
+        struct_x = A_hat
+        struct_x = self.struct_proj(struct_x)
+
+        learned_x = self.node_embedding.expand(batch_size, -1, -1)
+        blend = torch.sigmoid(self.alpha)
+        X = blend * struct_x + (1.0 - blend) * learned_x
         
         # Layer 1: H1 = ReLU(norm_A @ X @ W1)
         XW1 = self.w1(X) # (B, 16, hidden)
@@ -101,3 +117,21 @@ class LatentDenseGCN(nn.Module):
         logits = self.fc(graph_emb)
         
         return logits
+
+
+class LatentMLPTeacher(nn.Module):
+    def __init__(self, latent_dim=256, hidden_dim=128, n_classes=3, dropout=0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, n_classes),
+        )
+
+    def forward(self, z):
+        x = z.squeeze(1).reshape(z.shape[0], -1)
+        return self.net(x)
