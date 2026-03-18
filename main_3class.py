@@ -22,6 +22,11 @@ def main():
     train_parser.add_argument('--epochs_diff', type=int, default=100)
     train_parser.add_argument('--epochs_gcn', type=int, default=100)
     train_parser.add_argument('--batch_size', type=int, default=16)
+    train_parser.add_argument('--quality_eval_every', type=int, default=5, help='Evaluate phase-1 quality metrics every N epochs')
+    train_parser.add_argument('--phase1_quality_dir', type=str, default='./results_phase1_quality', help='Directory to store phase-1 quality outputs')
+    train_parser.add_argument('--diffusion_num_buckets', type=int, default=10, help='Number of timestep buckets for diffusion quality checks')
+    train_parser.add_argument('--teacher_class_weight_mode', type=str, default='inverse', choices=['inverse', 'effective'], help='Class weighting mode for LatentDenseGCN teacher')
+    train_parser.add_argument('--teacher_early_stop_patience', type=int, default=20, help='Early stopping patience (epochs) based on teacher macro-F1')
     
     # Guide Command
     guide_parser = subparsers.add_parser("guide", help="Phase 2: Generate Hard Negatives")

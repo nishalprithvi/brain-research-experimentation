@@ -1,0 +1,156 @@
+[Project Logbook] 3-Class Pipeline Improvement
+Date: 2026-03-18
+Agent: Codex
+
+Task Context
+- Focus only on 3-class pipeline improvements first.
+- Benchmark to beat: frozen run job 13811.
+- Benchmark metrics (job 13811):
+  - Accuracy: 0.71
+  - Macro-F1: 0.4605
+  - AUC-ROC (OVR): 0.7828
+  - Recall: CN=0.93, AD=0.08, MCI=0.34
+
+What was requested now
+- Start with Phase 1 improvements.
+- Add robust quality checks and tests for Phase 1.
+- Keep detailed progress, decisions, metrics, and observations in a persistent text log.
+- After Phase 1 stabilization, run downstream frozen 3-class and compare against benchmark.
+
+Proposed Phase 1 quality framework
+- VAE quality: val MSE, MAE, SSIM-like matrix similarity, per-class val MSE.
+- Latent quality: silhouette score, train-vs-val latent mean drift, train-vs-val covariance drift, epoch-to-epoch covariance stability.
+- Diffusion quality: denoising train loss by epoch, timestep-bucket MSE, timestep-bucket predicted-vs-true noise correlation.
+- Teacher (LatentDenseGCN) quality: macro-F1, per-class recall, confusion matrix, ECE, Brier score, probability entropy, calibrated metrics via temperature scaling.
+- Stability checks: metric variability across epochs (std/range of recent epochs).
+
+Changes implemented (Phase 1 only)
+- Updated main_3class train CLI with quality-control options:
+  - --quality_eval_every
+  - --phase1_quality_dir
+  - --diffusion_num_buckets
+  - --teacher_class_weight_mode
+  - --teacher_early_stop_patience
+- Reworked src/train_3class.py to:
+  - Create stratified train/val split for Phase 1 quality evaluation.
+  - Compute and save VAE quality metrics.
+  - Compute and save latent-space quality and drift metrics.
+  - Compute and save diffusion bucket-level denoising quality metrics.
+  - Train teacher with macro-F1-governed model selection and early stopping.
+  - Compute teacher calibration + robustness metrics and save best confusion matrix.
+  - Save all quality artifacts as JSON and CSV in results_phase1_quality/phase1_<timestamp>_seed_<seed>/
+- Added a dedicated Slurm runner:
+  - run_phase1_quality_3class.sh
+  - Supports single/multi-seed execution and logs quality summary.
+
+Progress status
+- Phase 1 quality instrumentation: Implemented.
+- Phase 1 quality Slurm runner: Implemented.
+- Runtime validation on cluster: Pending next run.
+- Downstream frozen rerun after Phase 1 updates: Pending.
+
+Known constraints
+- Git push to remote failed due missing GitHub credentials in current environment.
+- Local/GPU commits can be made, but remote push requires auth setup.
+
+Next execution plan
+1) Sync Phase 1 code updates to GPU cluster directory.
+2) Submit run_phase1_quality_3class.sh with seed 100 full epochs.
+3) Extract Phase 1 quality metrics and identify weak links.
+4) Apply Phase 1-targeted fixes only if quality metrics indicate weakness.
+5) Re-run Phase 1 quality job and compare deltas.
+6) Run frozen 3-class pipeline and compare against benchmark job 13811.
+7) If benchmark is beaten, document new benchmark in this file and optionally clean old logs.
+
+Run Attempt Update (Phase-1 quality run, job 13825)
+- Status: Failed near artifact export stage.
+- Root cause:
+  - CSV writer assumed all metric rows had identical keys.
+  - Earlier rows (before eval steps) had fewer keys, causing field mismatch ValueError.
+- Fix applied:
+  - CSV writer now uses union of all keys and fills missing values safely.
+- Additional enhancement applied:
+  - Added WeightedRandomSampler in LatentDenseGCN teacher training to improve minority-class sampling robustness.
+- Next action:
+  - Re-run Phase-1 quality job and capture full metrics + quality artifacts.
+
+Phase-1 Quality Run Result (job 13829, seed=100, full epochs)
+- Output log: job_logs/phase1_qc_3class_13829.out
+- Quality artifact dir: results_phase1_quality/phase1_20260318_162623_seed_100
+
+Observed Phase-1 metrics
+1) VAE quality (latest epoch 50)
+- train_loss_per_sample: 112.6984
+- val_mse: 0.010560
+- val_mae: 0.081186
+- val_ssim_like: 0.745450
+- per-class val_mse: class0=0.010555, class1=0.010580, class2=0.010568
+
+2) Latent quality
+- latent_silhouette: -0.002542 (near-zero/negative; weak class separability)
+- latent_mean_drift_l2: 1.2083
+- latent_cov_fro_drift: 17.4066
+- latent_cov_epoch_stability (last): 22.2444
+
+3) Diffusion quality (latest epoch 100)
+- train_loss_per_sample: 0.017116
+- timestep bucket trend:
+  - bucket_0_mse=0.9563, corr=0.1780
+  - bucket_9_mse=0.0031, corr=0.9988
+- Observation: denoising quality improves strongly toward later/easier timesteps; this part looks healthy.
+
+4) LatentDenseGCN teacher quality (best epoch 1)
+- best_macro_f1: 0.032828
+- recalls: CN=0.0, AD=1.0, MCI=0.0
+- confusion matrix shows full collapse to AD predictions only.
+- calibration:
+  - ece=0.6768
+  - brier=1.2498
+  - entropy=0.7699
+  - temperature scaled: temp=7.5595, calibrated_ece=0.3329, calibrated_brier=0.7184
+
+5) Stability indicators
+- teacher_macro_f1_std: ~0 (stably bad collapse)
+- vae_val_mse_lastk_std: 0.000203
+- diffusion_loss_lastk_std: 0.000574
+
+Key observations
+- VAE and diffusion quality are stable/acceptable for reconstruction + denoising.
+- The main bottleneck in Phase-1 is LatentDenseGCN teacher collapse (degenerate AD-only behavior).
+- Until teacher quality is fixed, guided generation reliability for class-conditional control remains questionable.
+
+Actionable next fixes (Phase-1 only)
+- Strengthen teacher input signal and representation:
+  - use richer latent features (mu and logvar or multi-view latent stats) rather than single z snapshot.
+- Add stricter teacher objective:
+  - optimize by macro-F1 + class recall constraints; not plain CE loss only.
+- Improve teacher validation rigor:
+  - class-balanced val batches and explicit collapse detector (single-class prediction trigger).
+- Add regularization against collapse:
+  - entropy floor / label smoothing + calibration-aware early stopping criteria.
+
+Frozen Benchmark Re-check after Phase-1 instrumentation (job 13831)
+- Run: run_frozen_pipeline_3class.sh 100
+- Final metrics:
+  - Accuracy: 0.71
+  - Macro-F1: 0.4530
+  - AUC-ROC (OVR): 0.7877
+  - Recall: CN=0.91, AD=0.08, MCI=0.35
+
+Comparison vs benchmark job 13811
+- Benchmark 13811:
+  - Accuracy: 0.71
+  - Macro-F1: 0.4605
+  - AUC-ROC (OVR): 0.7828
+  - Recall: CN=0.93, AD=0.08, MCI=0.34
+- Delta (13831 - 13811):
+  - Accuracy: +0.00
+  - Macro-F1: -0.0075 (worse)
+  - AUC-ROC: +0.0049 (better)
+  - AD Recall: +0.00
+  - MCI Recall: +0.01
+
+Conclusion at this stage
+- Benchmark 13811 is NOT beaten on primary target (Macro-F1).
+- Phase-1 quality instrumentation is working and exposes the main bottleneck clearly:
+  - LatentDenseGCN teacher collapse / poor class balance behavior.
