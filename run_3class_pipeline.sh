@@ -30,7 +30,7 @@ log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$RUN_LOG"
 }
 
-SEED=${1:-42}
+SEED=${1:-100}
 
 log_message "========================================="
 log_message "STARTING 3-CLASS FULL PIPELINE"
