@@ -13,7 +13,7 @@ from src.utils import set_seed
 
 def main():
     parser = argparse.ArgumentParser(description="3-Class Brain Network Classification Experimentation CLI")
-    parser.add_argument('--seed', type=int, default=42, help='Global random seed (Use -1 for completely random/unseeded)')
+    parser.add_argument('--seed', type=int, default=100, help='Global random seed (Use -1 for completely random/unseeded)')
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
     # Train Command
