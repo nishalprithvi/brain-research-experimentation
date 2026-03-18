@@ -1,0 +1,254 @@
+[Project Logbook] 3-Class Pipeline Improvement
+Date: 2026-03-18
+Agent: Codex
+
+Task Context
+- Focus only on 3-class pipeline improvements first.
+- Benchmark to beat: frozen run job 13811.
+- Benchmark metrics (job 13811):
+  - Accuracy: 0.71
+  - Macro-F1: 0.4605
+  - AUC-ROC (OVR): 0.7828
+  - Recall: CN=0.93, AD=0.08, MCI=0.34
+
+What was requested now
+- Start with Phase 1 improvements.
+- Add robust quality checks and tests for Phase 1.
+- Keep detailed progress, decisions, metrics, and observations in a persistent text log.
+- After Phase 1 stabilization, run downstream frozen 3-class and compare against benchmark.
+
+Proposed Phase 1 quality framework
+- VAE quality: val MSE, MAE, SSIM-like matrix similarity, per-class val MSE.
+- Latent quality: silhouette score, train-vs-val latent mean drift, train-vs-val covariance drift, epoch-to-epoch covariance stability.
+- Diffusion quality: denoising train loss by epoch, timestep-bucket MSE, timestep-bucket predicted-vs-true noise correlation.
+- Teacher (LatentDenseGCN) quality: macro-F1, per-class recall, confusion matrix, ECE, Brier score, probability entropy, calibrated metrics via temperature scaling.
+- Stability checks: metric variability across epochs (std/range of recent epochs).
+
+Changes implemented (Phase 1 only)
+- Updated main_3class train CLI with quality-control options:
+  - --quality_eval_every
+  - --phase1_quality_dir
+  - --diffusion_num_buckets
+  - --teacher_class_weight_mode
+  - --teacher_early_stop_patience
+- Reworked src/train_3class.py to:
+  - Create stratified train/val split for Phase 1 quality evaluation.
+  - Compute and save VAE quality metrics.
+  - Compute and save latent-space quality and drift metrics.
+  - Compute and save diffusion bucket-level denoising quality metrics.
+  - Train teacher with macro-F1-governed model selection and early stopping.
+  - Compute teacher calibration + robustness metrics and save best confusion matrix.
+  - Save all quality artifacts as JSON and CSV in results_phase1_quality/phase1_<timestamp>_seed_<seed>/
+- Added a dedicated Slurm runner:
+  - run_phase1_quality_3class.sh
+  - Supports single/multi-seed execution and logs quality summary.
+
+Progress status
+- Phase 1 quality instrumentation: Implemented.
+- Phase 1 quality Slurm runner: Implemented.
+- Runtime validation on cluster: Pending next run.
+- Downstream frozen rerun after Phase 1 updates: Pending.
+
+Known constraints
+- Git push to remote failed due missing GitHub credentials in current environment.
+- Local/GPU commits can be made, but remote push requires auth setup.
+
+Next execution plan
+1) Sync Phase 1 code updates to GPU cluster directory.
+2) Submit run_phase1_quality_3class.sh with seed 100 full epochs.
+3) Extract Phase 1 quality metrics and identify weak links.
+4) Apply Phase 1-targeted fixes only if quality metrics indicate weakness.
+5) Re-run Phase 1 quality job and compare deltas.
+6) Run frozen 3-class pipeline and compare against benchmark job 13811.
+7) If benchmark is beaten, document new benchmark in this file and optionally clean old logs.
+
+Run Attempt Update (Phase-1 quality run, job 13825)
+- Status: Failed near artifact export stage.
+- Root cause:
+  - CSV writer assumed all metric rows had identical keys.
+  - Earlier rows (before eval steps) had fewer keys, causing field mismatch ValueError.
+- Fix applied:
+  - CSV writer now uses union of all keys and fills missing values safely.
+- Additional enhancement applied:
+  - Added WeightedRandomSampler in LatentDenseGCN teacher training to improve minority-class sampling robustness.
+- Next action:
+  - Re-run Phase-1 quality job and capture full metrics + quality artifacts.
+
+Phase-1 Quality Run Result (job 13829, seed=100, full epochs)
+- Output log: job_logs/phase1_qc_3class_13829.out
+- Quality artifact dir: results_phase1_quality/phase1_20260318_162623_seed_100
+
+Observed Phase-1 metrics
+1) VAE quality (latest epoch 50)
+- train_loss_per_sample: 112.6984
+- val_mse: 0.010560
+- val_mae: 0.081186
+- val_ssim_like: 0.745450
+- per-class val_mse: class0=0.010555, class1=0.010580, class2=0.010568
+
+2) Latent quality
+- latent_silhouette: -0.002542 (near-zero/negative; weak class separability)
+- latent_mean_drift_l2: 1.2083
+- latent_cov_fro_drift: 17.4066
+- latent_cov_epoch_stability (last): 22.2444
+
+3) Diffusion quality (latest epoch 100)
+- train_loss_per_sample: 0.017116
+- timestep bucket trend:
+  - bucket_0_mse=0.9563, corr=0.1780
+  - bucket_9_mse=0.0031, corr=0.9988
+- Observation: denoising quality improves strongly toward later/easier timesteps; this part looks healthy.
+
+4) LatentDenseGCN teacher quality (best epoch 1)
+- best_macro_f1: 0.032828
+- recalls: CN=0.0, AD=1.0, MCI=0.0
+- confusion matrix shows full collapse to AD predictions only.
+- calibration:
+  - ece=0.6768
+  - brier=1.2498
+  - entropy=0.7699
+  - temperature scaled: temp=7.5595, calibrated_ece=0.3329, calibrated_brier=0.7184
+
+5) Stability indicators
+- teacher_macro_f1_std: ~0 (stably bad collapse)
+- vae_val_mse_lastk_std: 0.000203
+- diffusion_loss_lastk_std: 0.000574
+
+Key observations
+- VAE and diffusion quality are stable/acceptable for reconstruction + denoising.
+- The main bottleneck in Phase-1 is LatentDenseGCN teacher collapse (degenerate AD-only behavior).
+- Until teacher quality is fixed, guided generation reliability for class-conditional control remains questionable.
+
+Actionable next fixes (Phase-1 only)
+- Strengthen teacher input signal and representation:
+  - use richer latent features (mu and logvar or multi-view latent stats) rather than single z snapshot.
+- Add stricter teacher objective:
+  - optimize by macro-F1 + class recall constraints; not plain CE loss only.
+- Improve teacher validation rigor:
+  - class-balanced val batches and explicit collapse detector (single-class prediction trigger).
+- Add regularization against collapse:
+  - entropy floor / label smoothing + calibration-aware early stopping criteria.
+
+Phase-1 Teacher Collapse Fix Iteration 2
+- Additional root-cause hypothesis:
+  - Teacher trained on stochastic latent z creates unstable/noisy supervision.
+  - Combining strong inverse class weights with balanced sampling can over-bias predictions.
+- Fixes applied:
+  1) Teacher training now uses deterministic latent mu reshaped to 16x16 instead of stochastic z.
+  2) Teacher class-weight mode default switched to 'none'.
+  3) Added label smoothing in teacher CE loss (0.05) to reduce overconfidence collapse.
+  4) Phase-1 quality Slurm script now runs with --teacher_class_weight_mode none.
+- Next step:
+  - Re-run Phase-1 quality and evaluate whether macro-F1 and class recalls recover from AD-only collapse.
+
+LatentDenseGCN Fix Iteration 3 (current)
+Objective
+- Resolve persistent teacher collapse and improve Phase-1 teacher quality before further full-pipeline iterations.
+
+Changes made
+1) Model-level signal improvement (src/gcn_model.py)
+- Added sample-conditioned structural node features from adjacency rows (A_hat) via struct_proj.
+- Added learnable blend between structural features and static node embeddings (alpha gate).
+- Rationale: static embeddings alone underuse per-sample topology and can collapse to majority-class behavior.
+
+2) Training-level anti-collapse improvement (src/train_3class.py)
+- Added class-weight mode: sqrt_inverse (less aggressive than inverse).
+- Added anti-collapse regularizer on batch mean class probabilities.
+- Kept label smoothing in CE loss.
+- Set default teacher_class_weight_mode to sqrt_inverse in CLI path.
+
+3) Runner defaults
+- run_phase1_quality_3class.sh now uses --teacher_class_weight_mode sqrt_inverse.
+
+Validation plan
+- Re-run Phase-1 quality (seed 100, full epochs).
+- Check teacher macro-F1, per-class recall, confusion matrix, and calibration.
+- Only then run downstream proxy/full runs.
+
+[2026-03-18 17:40 SGT] Execution resume
+- User approved proceeding.
+- Verified working tree contains Iteration-3 Phase-1 teacher-fix changes:
+  main_3class.py, src/gcn_model.py, src/train_3class.py, run_phase1_quality_3class.sh.
+- Immediate plan: validate SSH access to tc2 from this environment, sync latest code to GPU repo, run Phase-1 quality job, and log teacher-collapse diagnostics + metrics.
+
+[2026-03-18 17:42 SGT] Iteration-4 teacher anti-collapse patch
+- Added configurable teacher options:
+  --teacher_use_balanced_sampler (default OFF)
+  --teacher_max_class_weight (used 2.0 in run script)
+  --teacher_collapse_reg (used 0.20 in run script)
+- Rationale: previous setup applied both balanced sampler + strong minority weighting, which over-biased AD and caused persistent collapse.
+- Validation step: run a new Phase-1 quality job and compare macro-F1 and per-class recall against job 13842.
+
+[2026-03-18 17:46 SGT] Iteration-5 teacher objective update
+- Added --teacher_loss_mode with options: ce, class_balanced_ce.
+- New run config uses class_balanced_ce + capped class weights + collapse regularizer.
+- Goal: prevent single-class collapse by averaging per-class CE (macro-style) in each batch.
+
+[2026-03-18 17:49 SGT] Iteration-6 latent separability fix
+- Added optional VAE auxiliary latent classification loss on mu: --vae_aux_cls_weight.
+- Latent stats now computed on deterministic mu (not stochastic z), aligned with teacher input path.
+- run_phase1_quality_3class.sh now enables --vae_aux_cls_weight 0.20.
+- Goal: improve latent separability so teacher no longer converges to single-class trivial solution.
+
+[2026-03-18 17:53 SGT] Iteration-7 LatentDenseGCN adjacency fix
+- Replaced sigmoid-based adjacency construction with abs(mu) + per-sample min-max normalization.
+- Rationale: sigmoid on near-zero latent values compressed A around 0.5, likely destroying discriminative structure and causing single-class collapse.
+- Validation: run Phase-1 quality again with same seed/config for direct comparability.
+
+[2026-03-18 17:56 SGT] Iteration-8 fallback teacher path added (no removal of existing path)
+- Added teacher model selector: --teacher_model_type {latent_densegcn, latent_mlp}.
+- Kept LatentDenseGCN unchanged as default path; added LatentMLPTeacher only as configurable fallback for diagnostics.
+- Updated run_phase1_quality_3class.sh to accept optional 6th arg TEACHER_MODEL.
+- Next diagnostic run will test latent_mlp teacher to determine if collapse is architecture-specific.
+
+[2026-03-18 17:58 SGT] Key diagnostic outcome (job 13854, teacher=latent_mlp)
+- Teacher collapse resolved.
+- best_macro_f1=0.5365 @ epoch 39
+- recall_cn=0.6159, recall_ad=0.5385, recall_mci=0.6351
+- This indicates the latent representation can be discriminative; primary failure was teacher architecture path.
+- Next action: propagate teacher_model_type as a configurable option for guided sampling so this improved teacher can be used in Phase-2 guidance tests.
+
+[2026-03-18 18:00 SGT] Pipeline wiring update
+- Added teacher_model_type option to Phase-2 guidance path and main_3class guide CLI.
+- Updated run_3class_pipeline.sh to accept optional TEACHER_MODEL arg and pass aligned Phase-1/2 teacher config.
+- Preparing full-pipeline validation with TEACHER_MODEL=latent_mlp.
+
+[2026-03-18 18:14 SGT] Next optimization loop (Phase-5 synthetic cap sweep)
+- Added finetune args: --max_syn_ad, --max_syn_mci (default 100/100 to preserve behavior).
+- Added run_phase5_sweep_3class.sh to sweep Phase-5 caps quickly without re-running Phase-1..4.
+- Planned initial grid: AD caps [100,150,200], MCI caps [100,150], seed=100.
+
+[2026-03-18 18:18 SGT] Phase-5 loss update for AD recall push
+- Added configurable fine-tune loss options:
+  --loss_class_weight_mode {none,inverse,sqrt_inverse,effective}
+  --label_smoothing
+- First targeted test plan:
+  max_syn_ad=150, max_syn_mci=150, loss_class_weight_mode=sqrt_inverse, label_smoothing=0.05.
+[2026-03-18 18:19 SGT] Phase-5 sweep + weighted-loss test summary
+- Sweep job 13858 best config: max_syn_ad=150, max_syn_mci=150
+  -> Accuracy=0.75, Macro-F1=0.5367, AUC=0.8046, Recall CN/AD/MCI=0.96/0.23/0.36
+- Weighted-loss test job 13859 (same caps + sqrt_inverse weights + label_smoothing=0.05):
+  -> Accuracy=0.75, Macro-F1=0.5254, AUC=0.7824, Recall CN/AD/MCI=0.93/0.15/0.45
+- Interpretation: class-weighted CE (sqrt_inverse) reduced AD recall and macro-F1 vs best unweighted run; keep unweighted as current best.
+[2026-03-18 18:20 SGT] Best-so-far macro result (job 13860)
+- Config: max_syn_ad=150, max_syn_mci=150, loss_class_weight_mode=inverse, label_smoothing=0.0
+- Final metrics:
+  Accuracy=0.75
+  Macro-F1=0.5441 (new best)
+  AUC-OVR=0.8092
+  Recall CN/AD/MCI=0.91/0.15/0.49
+- Comparison to previous best (13858 ad150/mci150 unweighted):
+  Macro-F1: 0.5367 -> 0.5441 (up)
+  AUC:      0.8046 -> 0.8092 (up)
+  AD recall: 0.23 -> 0.15 (down)
+  MCI recall: 0.36 -> 0.49 (up)
+- Status: macro objective improved; AD recall objective still under target.
+[2026-03-18 18:21 SGT] AD-heavy follow-up (job 13861)
+- Config: max_syn_ad=300, max_syn_mci=150, loss_class_weight_mode=inverse
+- Final metrics: Accuracy=0.76, Macro-F1=0.5345, AUC=0.8135, Recall CN/AD/MCI=0.97/0.15/0.39
+- Interpretation: AD-heavy injection improved AUC but did not improve AD recall beyond 0.15; macro-F1 below best 0.5441.
+- Current best macro setup remains job 13860.
+[2026-03-18 18:22 SGT] Targeted run (job 13862)
+- Config: max_syn_ad=150, max_syn_mci=100, loss_class_weight_mode=inverse
+- Final metrics: Accuracy=0.74, Macro-F1=0.5058, AUC=0.8042, Recall CN/AD/MCI=0.88/0.08/0.53
+- Interpretation: higher MCI recall but AD recall collapsed again; inferior to best macro run (13860).
