@@ -13,6 +13,25 @@ from dgl.nn import SumPooling
 from src.standard_gcn import StandardGCN
 from src.data_loader_3class import load_adni_dgl_with_labels
 
+def _class_weights_from_distribution(dist, mode="none", beta=0.999):
+    if mode == "none":
+        return None
+    weights = []
+    for c in [0, 1, 2]:
+        n_c = max(int(dist.get(c, 0)), 1)
+        if mode == "effective":
+            eff_num = 1.0 - (beta ** n_c)
+            w = (1.0 - beta) / max(eff_num, 1e-12)
+        elif mode == "sqrt_inverse":
+            w = 1.0 / np.sqrt(float(n_c))
+        else:
+            w = 1.0 / float(n_c)
+        weights.append(w)
+    weights = np.array(weights, dtype=np.float32)
+    weights = weights / max(weights.min(), 1e-12)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 class FineTunedGCN(nn.Module):
     def __init__(self, encoder, n_classes=3):
         super(FineTunedGCN, self).__init__()
@@ -24,7 +43,16 @@ class FineTunedGCN(nn.Module):
         logits = self.classifier(h)
         return logits
 
-def train_finetune(epochs=50, batch_size=32, frozen=True, syn_dir='./results_guidance_3class'):
+def train_finetune(
+    epochs=50,
+    batch_size=32,
+    frozen=True,
+    syn_dir='./results_guidance_3class',
+    max_syn_ad=100,
+    max_syn_mci=100,
+    loss_class_weight_mode="none",
+    label_smoothing=0.0,
+):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
@@ -113,11 +141,12 @@ def train_finetune(epochs=50, batch_size=32, frozen=True, syn_dir='./results_gui
             else:
                 print(f"Warning: {syn_path} not found. Proceeding unbalanced for {cls_name.upper()}.")
 
-    # Inject AD and MCI (Capped at 100 each, consistent with optimized 2-class setup)
-    inject_synthetic(1, 'ad', n_ad, max_inject=100)
-    inject_synthetic(2, 'mci', n_mci, max_inject=100)
+    inject_synthetic(1, 'ad', n_ad, max_inject=max_syn_ad)
+    inject_synthetic(2, 'mci', n_mci, max_inject=max_syn_mci)
     
     print(f"\nTotal Training Samples after Synthesis: {len(train_graphs)}")
+    train_dist = dict(zip(*np.unique(np.array(train_labels), return_counts=True)))
+    print(f"Train Distribution after Synthesis: {train_dist}")
 
     # DataLoader
     def collate(samples):
@@ -164,7 +193,13 @@ def train_finetune(epochs=50, batch_size=32, frozen=True, syn_dir='./results_gui
         print("Fine-tuning Entire Network...")
         
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = _class_weights_from_distribution(train_dist, mode=loss_class_weight_mode)
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
+        print(f"Using class weights ({loss_class_weight_mode}): {class_weights}")
+    else:
+        print("Using class weights: none")
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
     
     # Checkpointing Logic
     best_val_auc = 0.0
@@ -257,6 +292,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--unfreeze', action='store_true')
+    parser.add_argument('--max_syn_ad', type=int, default=100)
+    parser.add_argument('--max_syn_mci', type=int, default=100)
+    parser.add_argument('--loss_class_weight_mode', type=str, default='none', choices=['none', 'inverse', 'sqrt_inverse', 'effective'])
+    parser.add_argument('--label_smoothing', type=float, default=0.0)
     args = parser.parse_args()
     
-    train_finetune(epochs=args.epochs, frozen=not args.unfreeze)
+    train_finetune(
+        epochs=args.epochs,
+        frozen=not args.unfreeze,
+        max_syn_ad=args.max_syn_ad,
+        max_syn_mci=args.max_syn_mci,
+        loss_class_weight_mode=args.loss_class_weight_mode,
+        label_smoothing=args.label_smoothing,
+    )

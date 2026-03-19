@@ -11,12 +11,11 @@ from src.train_contrastive_3class import train_contrastive
 from src.finetune_3class import train_finetune
 from src.utils import set_seed
 
-
 def main():
     parser = argparse.ArgumentParser(description="3-Class Brain Network Classification Experimentation CLI")
     parser.add_argument('--seed', type=int, default=100, help='Global random seed (Use -1 for completely random/unseeded)')
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
+    
     # Train Command
     train_parser = subparsers.add_parser("train", help="Train Phase 1: VAE, Diffusion, GCN")
     train_parser.add_argument('--epochs_vae', type=int, default=50)
@@ -34,7 +33,7 @@ def main():
     train_parser.add_argument('--teacher_max_class_weight', type=float, default=0.0, help='If >0, cap teacher class weights to this maximum value')
     train_parser.add_argument('--teacher_collapse_reg', type=float, default=0.05, help='Strength of anti-collapse regularizer on mean class probabilities')
     train_parser.add_argument('--teacher_early_stop_patience', type=int, default=20, help='Early stopping patience (epochs) based on teacher macro-F1')
-
+    
     # Guide Command
     guide_parser = subparsers.add_parser("guide", help="Phase 2: Generate Hard Negatives")
     guide_parser.add_argument('--scale', type=float, default=2.0)
@@ -54,19 +53,16 @@ def main():
     guide_parser.add_argument('--quality_dup_intra_th', type=float, default=0.995)
     guide_parser.add_argument('--quality_max_samples', type=int, default=256)
     guide_parser.add_argument('--quality_edge_threshold', type=float, default=0.2)
-    guide_parser.add_argument('--quality_enforce_gates', action='store_true')
-    guide_parser.add_argument('--quality_min_keep', type=int, default=50)
-    guide_parser.add_argument('--quality_fallback_keep_all', action='store_true')
-
+    
     # Filter Command
     filter_parser = subparsers.add_parser("filter", help="Phase 3: Filter synthetic data")
     filter_parser.add_argument('--threshold_min', type=float, default=0.5)
     filter_parser.add_argument('--threshold_max', type=float, default=0.98)
-
+    
     # Pretrain Command
     pretrain_parser = subparsers.add_parser("pretrain", help="Phase 4: Contrastive Pretraining")
     pretrain_parser.add_argument('--epochs', type=int, default=100)
-
+    
     # Finetune Command
     ft_parser = subparsers.add_parser("finetune", help="Phase 5: Fine-tune Multi-class GCN")
     ft_parser.add_argument('--epochs', type=int, default=50)
@@ -75,14 +71,14 @@ def main():
     ft_parser.add_argument('--max_syn_mci', type=int, default=100)
     ft_parser.add_argument('--loss_class_weight_mode', type=str, default='none', choices=['none', 'inverse', 'sqrt_inverse', 'effective'])
     ft_parser.add_argument('--label_smoothing', type=float, default=0.0)
-
+    
     args = parser.parse_args()
-
+    
     if args.seed is not None and args.seed != -1:
         set_seed(args.seed)
     elif args.seed == -1:
         print("[CONFIG] Running COMPLETELY UNSEEDED (Stochastic Mode)")
-
+    
     if args.command == "train":
         print("--- Starting Phase 1: Generative Training ---")
         run_training(args)
@@ -107,14 +103,9 @@ def main():
             '--quality_dup_intra_th', str(args.quality_dup_intra_th),
             '--quality_max_samples', str(args.quality_max_samples),
             '--quality_edge_threshold', str(args.quality_edge_threshold),
-            '--quality_min_keep', str(args.quality_min_keep),
         ]
         if args.skip_quality_eval:
             sys.argv.append('--skip_quality_eval')
-        if args.quality_enforce_gates:
-            sys.argv.append('--quality_enforce_gates')
-        if args.quality_fallback_keep_all:
-            sys.argv.append('--quality_fallback_keep_all')
         run_guided_sampling()
     elif args.command == "filter":
         print("--- Starting Phase 3: Filtering ---")
@@ -135,7 +126,6 @@ def main():
         )
     else:
         parser.print_help()
-
 
 if __name__ == "__main__":
     main()
