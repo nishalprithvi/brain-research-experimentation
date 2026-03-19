@@ -31,6 +31,7 @@ log_message() {
 }
 
 SEED=${1:-100}
+TEACHER_MODEL=${2:-latent_densegcn}
 
 log_message "========================================="
 log_message "STARTING 3-CLASS FULL PIPELINE"
@@ -39,6 +40,7 @@ log_message "Project Root: $PROJECT_ROOT"
 log_message "Log File: $RUN_LOG"
 log_message "Slurm Job ID: ${SLURM_JOB_ID:-Local}"
 log_message "Seed: $SEED"
+log_message "Teacher Model: $TEACHER_MODEL"
 
 # =============================================================================
 # ENV SETUP
@@ -56,7 +58,7 @@ log_message "Activated virtual environment: .venv"
 log_message ""
 log_message "--- Phase 1: Generative Training ---"
 log_message "Training VAE, Diffusion, and Latent Dense GCN..."
-CMD_TRAIN="python main_3class.py --seed $SEED train --epochs_vae 50 --epochs_diff 100 --epochs_gcn 100"
+CMD_TRAIN="python main_3class.py --seed $SEED train --epochs_vae 50 --epochs_diff 100 --epochs_gcn 100 --teacher_model_type $TEACHER_MODEL --vae_aux_cls_weight 0.20 --teacher_class_weight_mode sqrt_inverse --teacher_loss_mode class_balanced_ce --teacher_max_class_weight 2.0 --teacher_collapse_reg 0.20"
 log_message "Executing: $CMD_TRAIN"
 $CMD_TRAIN 2>&1 | tee -a "$RUN_LOG"
 EXIT_CODE=$?
@@ -71,7 +73,7 @@ log_message "✅ Phase 1 (Training) Complete."
 log_message ""
 log_message "--- Phase 2: Guided Synthetic Generation ---"
 log_message "Generating synthetic AD and MCI graphs..."
-CMD_GUIDE="python main_3class.py --seed $SEED guide --scale 2.0"
+CMD_GUIDE="python main_3class.py --seed $SEED guide --scale 2.0 --teacher_model_type $TEACHER_MODEL"
 log_message "Executing: $CMD_GUIDE"
 $CMD_GUIDE 2>&1 | tee -a "$RUN_LOG"
 EXIT_CODE=$?

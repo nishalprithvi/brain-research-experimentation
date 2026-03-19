@@ -22,9 +22,6 @@ N_MCI=${4:-120}
 TEACHER_MODEL=${5:-latent_mlp}
 SCALE_AD=${6:-3.0}
 SCALE_MCI=${7:-2.0}
-ENFORCE_GATES=${8:-0}
-MIN_KEEP=${9:-50}
-FALLBACK_KEEP_ALL=${10:-1}
 
 LOG_DIR=./job_logs
 mkdir -p "$LOG_DIR"
@@ -32,7 +29,7 @@ RUN_TS=$(date '+%Y%m%d_%H%M%S')
 RUN_LOG="$LOG_DIR/phase2_quality_${RUN_TS}.log"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] START PHASE-2 QUALITY RUN" | tee -a "$RUN_LOG"
-echo "seed=$SEED scale=$SCALE scale_ad=$SCALE_AD scale_mci=$SCALE_MCI n_ad=$N_AD n_mci=$N_MCI teacher_model=$TEACHER_MODEL enforce_gates=$ENFORCE_GATES min_keep=$MIN_KEEP fallback_keep_all=$FALLBACK_KEEP_ALL" | tee -a "$RUN_LOG"
+echo "seed=$SEED scale=$SCALE scale_ad=$SCALE_AD scale_mci=$SCALE_MCI n_ad=$N_AD n_mci=$N_MCI teacher_model=$TEACHER_MODEL" | tee -a "$RUN_LOG"
 
 CMD="python main_3class.py --seed $SEED guide \
   --scale $SCALE \
@@ -50,15 +47,7 @@ CMD="python main_3class.py --seed $SEED guide \
   --quality_dup_real_th 0.98 \
   --quality_dup_intra_th 0.995 \
   --quality_max_samples 256 \
-  --quality_edge_threshold 0.2 \
-  --quality_min_keep $MIN_KEEP"
-
-if [ "$ENFORCE_GATES" = "1" ]; then
-  CMD="$CMD --quality_enforce_gates"
-fi
-if [ "$FALLBACK_KEEP_ALL" = "1" ]; then
-  CMD="$CMD --quality_fallback_keep_all"
-fi
+  --quality_edge_threshold 0.2"
 
 echo "Executing: $CMD" | tee -a "$RUN_LOG"
 eval "$CMD" 2>&1 | tee -a "$RUN_LOG"

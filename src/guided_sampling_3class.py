@@ -346,14 +346,9 @@ def _phase2_quality_report(
             "plot_file": traj_plot,
         },
         "retention_summary": {
-            "pass_rate_conf": float(np.mean(pass_conf)),
-            "pass_rate_dup_real": float(np.mean(pass_dup)),
-            "pass_rate_dup_intra": float(np.mean(pass_intra)),
-            "pass_rate_spec": float(np.mean(pass_spec)),
             "pass_rate_all_gates": float(np.mean(pass_all)),
             "num_pass_all": int(np.sum(pass_all)),
             "num_fail_any": int(len(pass_all) - np.sum(pass_all)),
-            "keep_indices": np.where(pass_all)[0].astype(int).tolist(),
         },
     }
 
@@ -361,7 +356,7 @@ def _phase2_quality_report(
     with open(out_json, "w") as f:
         json.dump(report, f, indent=2)
     print(f"[Phase2 Quality] Saved report: {out_json}")
-    return report, pass_all
+    return report
 
 
 def guided_sampling(
@@ -386,9 +381,6 @@ def guided_sampling(
     quality_dup_intra_th=0.995,
     quality_max_samples=256,
     quality_edge_threshold=0.2,
-    quality_enforce_gates=False,
-    quality_min_keep=50,
-    quality_fallback_keep_all=True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -475,8 +467,10 @@ def guided_sampling(
     teacher_probs = np.concatenate(all_teacher_probs, axis=0)
     print(f"Generated {len(matrices)} matrices total.")
 
+    os.makedirs(save_dir, exist_ok=True)
+    save_as_dgl(matrices, os.path.join(save_dir, save_name))
+
     report = None
-    keep_mask = None
     if quality_eval:
         quality_cfg = {
             "quality_conf_threshold_ad": quality_conf_threshold_ad,
@@ -488,7 +482,7 @@ def guided_sampling(
             "quality_max_samples": quality_max_samples,
             "quality_edge_threshold": quality_edge_threshold,
         }
-        report, keep_mask = _phase2_quality_report(
+        report = _phase2_quality_report(
             synthetic_matrices=matrices,
             target_class=target_class,
             teacher_probs=teacher_probs,
@@ -497,31 +491,6 @@ def guided_sampling(
             quality_dir=quality_dir or save_dir,
             cfg=quality_cfg,
         )
-
-    if quality_eval and quality_enforce_gates and keep_mask is not None:
-        keep_idx = np.where(keep_mask)[0]
-        n_kept = int(len(keep_idx))
-        print(f"[Phase2 Quality] Gate enforcement enabled: keeping {n_kept}/{len(matrices)} samples.")
-        if n_kept < int(quality_min_keep):
-            if quality_fallback_keep_all:
-                print(
-                    f"[Phase2 Quality] Kept count {n_kept} below quality_min_keep={quality_min_keep}. "
-                    "Fallback enabled -> preserving all generated samples."
-                )
-            elif n_kept == 0:
-                raise RuntimeError(
-                    "QA gate enforcement removed all synthetic samples. "
-                    "Disable enforcement or relax thresholds."
-                )
-            else:
-                matrices = matrices[keep_idx]
-                teacher_probs = teacher_probs[keep_idx]
-        else:
-            matrices = matrices[keep_idx]
-            teacher_probs = teacher_probs[keep_idx]
-
-    os.makedirs(save_dir, exist_ok=True)
-    save_as_dgl(matrices, os.path.join(save_dir, save_name))
 
     log_data = {
         "timestamp": datetime.datetime.now().isoformat(),
@@ -533,10 +502,7 @@ def guided_sampling(
     }
     if report is not None:
         log_data["quality_pass_rate_all_gates"] = report["retention_summary"]["pass_rate_all_gates"]
-        log_data["quality_num_pass_all"] = report["retention_summary"]["num_pass_all"]
         log_data["quality_mean_target_prob"] = report["teacher_confidence"]["mean_target_prob"]
-    log_data["quality_enforce_gates"] = bool(quality_enforce_gates)
-    log_data["saved_samples"] = int(len(matrices))
     log_path = os.path.join(save_dir, "experiment_log.txt")
     with open(log_path, "a") as f:
         f.write("-" * 50 + "\n")
@@ -572,9 +538,6 @@ def main():
     parser.add_argument("--quality_dup_intra_th", type=float, default=0.995)
     parser.add_argument("--quality_max_samples", type=int, default=256)
     parser.add_argument("--quality_edge_threshold", type=float, default=0.2)
-    parser.add_argument("--quality_enforce_gates", action="store_true")
-    parser.add_argument("--quality_min_keep", type=int, default=50)
-    parser.add_argument("--quality_fallback_keep_all", action="store_true")
     args = parser.parse_args()
 
     print("Evaluating real dataset distribution to balance classes...")
@@ -614,9 +577,6 @@ def main():
         "quality_dup_intra_th": args.quality_dup_intra_th,
         "quality_max_samples": args.quality_max_samples,
         "quality_edge_threshold": args.quality_edge_threshold,
-        "quality_enforce_gates": args.quality_enforce_gates,
-        "quality_min_keep": args.quality_min_keep,
-        "quality_fallback_keep_all": args.quality_fallback_keep_all,
     }
 
     if target_ad_samples > 0:
