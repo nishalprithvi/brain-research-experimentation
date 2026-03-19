@@ -252,3 +252,140 @@ Validation plan
 - Config: max_syn_ad=150, max_syn_mci=100, loss_class_weight_mode=inverse
 - Final metrics: Accuracy=0.74, Macro-F1=0.5058, AUC=0.8042, Recall CN/AD/MCI=0.88/0.08/0.53
 - Interpretation: higher MCI recall but AD recall collapsed again; inferior to best macro run (13860).
+[2026-03-18 19:09 SGT] Phase-2 quality tuning update
+- Added Phase-2 QA suite in guided_sampling_3class.py:
+  confidence distributions, duplicate risk (real/intra), diversity distance stats,
+  spectral plausibility with class-specific auto-tau option, and guidance trajectory monotonicity plots.
+- Fast run 13873 (AD scale 3.0, MCI 2.0, auto spectral tau):
+  AD pass_all=0.1833, MCI pass_all=0.4000
+- Fast run 13875 (AD scale 5.0, MCI 2.0, auto spectral tau):
+  AD pass_all=0.2083, MCI pass_all=0.4000
+- Next: one more quick AD scale probe at 8.0.
+[2026-03-18 19:10 SGT] Phase-2 QA tuning (fast runs only)
+- Baseline fast run 13872 (scale_ad=2.0, fixed tau=2.0):
+  AD pass_all=0.0083, MCI pass_all=0.0000 (spectral gate overly strict).
+- Updated Phase-2 code:
+  1) class-specific guidance scales (scale_ad, scale_mci),
+  2) auto spectral tau mode (tau_input <= 0 uses p95 of real-class D_spec),
+  3) passthrough args in main_3class.py and run_phase2_quality_3class.sh.
+- Fast run 13873 (scale_ad=3.0, auto tau): AD pass_all=0.1833, MCI pass_all=0.4000.
+- Fast run 13875 (scale_ad=5.0, auto tau): AD pass_all=0.2083, MCI pass_all=0.4000.
+- Fast run 13876 (scale_ad=8.0, auto tau): AD pass_all=0.2417, MCI pass_all=0.4000.
+- Selected provisional Phase-2 setting for next stage: scale_ad=8.0, scale_mci=2.0, teacher=latent_mlp, auto spectral tau.
+[2026-03-18 19:11 SGT] Phase-2 final fast-tuning status
+- Run 13876 (scale_ad=8.0, scale_mci=2.0):
+  AD pass_all=0.2417, MCI pass_all=0.4000
+- Run 13877 (scale_ad=8.0, scale_mci=3.0):
+  AD pass_all=0.2417, MCI pass_all=0.4083
+- Selected Phase-2 quality config:
+  teacher_model=latent_mlp, scale_ad=8.0, scale_mci=3.0,
+  quality_spectral_tau=-1 (auto from real class p95),
+  quality_conf_threshold_ad=0.85, quality_conf_threshold_mci=0.75,
+  quality_dup_real_th=0.98, quality_dup_intra_th=0.995.
+[2026-03-18 19:27 SGT] Launching full E2E run with tuned Phase-2 config
+- Phase-1: teacher_model=latent_mlp, aux latent cls enabled, class-balanced teacher loss
+- Phase-2: scale_ad=8.0, scale_mci=3.0, auto spectral tau
+- Phase-5: max_syn_ad=150, max_syn_mci=150, inverse CE weights (best macro setup so far)
+[2026-03-18 19:48 SGT] Full E2E tuned run result (job 13888)
+- Config summary:
+  Phase-2 scales AD/MCI=8.0/3.0 with QA enabled and auto spectral tau.
+  Phase-3 retained synthetics: AD 682/754, MCI 412/449.
+  Phase-5 used max_syn_ad=150, max_syn_mci=150, inverse CE weights.
+- Final metrics:
+  Accuracy=0.69
+  Macro-F1=0.4223
+  AUC-OVR=0.7720
+  Recall CN/AD/MCI=0.88/0.00/0.41
+- Comparison vs benchmark 13811 (0.71 / 0.4605 / 0.7828): this run is worse on accuracy, macro-F1, and AUC.
+- Conclusion: current aggressive Phase-2/3 setting hurts final downstream performance; do not promote this as default for E2E training.
+[2026-03-18 20:02 SGT] Benchmark correction and re-evaluation plan
+- Updated benchmark reference to job 13860 (best run).
+- Plan: run targeted validation (Phase2->Phase3->Phase5) with safer Phase-2 scales first,
+  compare to 13860, then decide full E2E.
+
+[2026-03-18 21:18 +08] VPN reconnect + resumed Phase-2/5 stabilization
+- Benchmark used: job 13860 (AUC 0.8092, Macro-F1 0.5441, recalls CN/AD/MCI = 0.91/0.15/0.49)
+- Re-evaluation run 13906 (Phase2->3->5): AUC 0.7629, Macro-F1 0.4421, recalls 0.90/0.62/0.12 (AD up, MCI down)
+- Artifact revert test 13907 with *_seed_100 filtered synthetics: AUC 0.7722, Macro-F1 0.4898
+- Phase2 scale/cap tests:
+  - 13910: AUC 0.7714, Macro-F1 0.4115
+  - 13911: AUC 0.7802, Macro-F1 0.4559
+- Artifact-mix isolation:
+  - 13913: AUC 0.7734, Macro-F1 0.4148
+  - 13914: AUC 0.7739, Macro-F1 0.4214
+- Phase5 class-weight sweep (seed100 artifacts, ad/mci caps 150/150):
+  - none (13915): AUC 0.7805, Macro-F1 0.5044
+  - inverse (13916): AUC 0.7704, Macro-F1 0.5170
+  - sqrt_inverse (13917): AUC 0.7663, Macro-F1 0.4393
+  - effective (13918): AUC 0.7699, Macro-F1 0.4708
+- Phase2 low-scale sweeps:
+  - 13919: AUC 0.7850, Macro-F1 0.4139
+  - 13920: AUC 0.7845, Macro-F1 0.4132
+- Phase3 strict threshold sweeps:
+  - 13921 (0.55-0.95): AUC 0.7691, Macro-F1 0.4411
+  - 13922 (0.60-0.95): AUC 0.7753, Macro-F1 0.4478
+- AD-heavy cap sweep with seed100 artifacts:
+  - 13923 (ad200,mci100,inverse): AUC 0.7699, Macro-F1 0.5232
+  - 13924 (ad180,mci120,inverse): AUC 0.7774, Macro-F1 0.4619
+  - 13925 (ad200,mci100,none): AUC 0.7898, Macro-F1 0.5496  <-- exceeds benchmark Macro-F1
+  - 13926 (ad220,mci100,inverse): AUC 0.7904, Macro-F1 0.5444
+
+Key observation:
+- Current phase2-generated synthetic sets are not yet stable for downstream gains.
+- Best current operating point is phase5 cap tuning with seed100 filtered synthetics and AD-heavy injection.
+[2026-03-18 21:22 +08] Determinism & best-config replication update
+- Updated src/utils.py to strengthen deterministic behavior:
+  - torch.use_deterministic_algorithms(True, warn_only=True)
+  - CUBLAS_WORKSPACE_CONFIG=:4096:8
+  - TF32 disabled for matmul/cudnn
+- Best improving configs:
+  - 13925 (ad200,mci100,loss=none): AUC 0.7898, Macro-F1 0.5496 (beats benchmark Macro-F1 0.5441)
+  - 13926 (ad220,mci100,loss=inverse): AUC 0.7904, Macro-F1 0.5444
+- Deterministic replicate checks of 13925 settings after patch:
+  - 13929: AUC 0.7834, Macro-F1 0.4508
+  - 13930: AUC 0.7933, Macro-F1 0.5451
+Observation:
+- Macro-F1 target can be exceeded, but run-to-run variance remains due non-deterministic GPU graph ops / training path.
+[2026-03-19 00:16 +08] Phase-2 gate-enforcement implementation + validation
+Changes implemented:
+- src/guided_sampling_3class.py
+  - Added enforceable QA gating controls:
+    - quality_enforce_gates
+    - quality_min_keep
+    - quality_fallback_keep_all
+  - _phase2_quality_report now returns (report, pass_all_mask)
+  - retention_summary now logs per-gate pass rates and keep_indices
+  - Gate enforcement applied before save_as_dgl (configurable)
+  - Added explicit logging of gate enforcement decisions and final saved sample count
+- main_3class.py
+  - Added guide CLI args passthrough:
+    - --quality_enforce_gates
+    - --quality_min_keep
+    - --quality_fallback_keep_all
+- run_phase2_quality_3class.sh
+  - Added script params for enforcement toggles and min_keep
+  - Logged enforcement configuration in run log
+
+Validation run:
+- Job 13953 (phase2 quality run, enforce_gates=1, min_keep=30, fallback_keep_all=1)
+- AD class:
+  - gate kept 21/120 (< min_keep 30)
+  - fallback triggered -> preserved all 120 for AD
+- MCI class:
+  - gate kept 48/120 (>= min_keep)
+  - saved 48 for MCI
+- Confirms enforcement path works and fallback safety works.
+[2026-03-19 00:45 +08] Phase-2 E2E pair (baseline vs gate-enforced)
+- Job 13959 (baseline, no gate enforcement):
+  - synthetic kept pre-filter: AD 754, MCI 449
+  - phase3 filtered: AD 682, MCI 412
+  - phase5 used: AD 200, MCI 100
+  - Final: AUC 0.7873, Macro-F1 0.4366, recalls CN/AD/MCI = 0.91/0.00/0.42
+- Job 13960 (gate-enforced, min_keep=30, fallback=on):
+  - gate-kept pre-filter: AD 103/754, MCI 166/449
+  - phase3 filtered: AD 93, MCI 152
+  - phase5 used: AD 93, MCI 100
+  - Final: AUC 0.7859, Macro-F1 0.3776, recalls CN/AD/MCI = 0.99/0.23/0.04
+Conclusion:
+- Gate enforcement works technically, but current thresholds over-prune and destabilize class balance.
+- Before additional E2E, tune min_keep/thresholds (or class-specific fallback) to avoid AD/MCI collapse.
