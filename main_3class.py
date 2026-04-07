@@ -62,6 +62,15 @@ def main():
     # Pretrain Command
     pretrain_parser = subparsers.add_parser("pretrain", help="Phase 4: Contrastive Pretraining")
     pretrain_parser.add_argument('--epochs', type=int, default=100)
+    pretrain_parser.add_argument('--batch_size', type=int, default=32)
+    pretrain_parser.add_argument('--syn_dir', type=str, default='./results_guidance_3class')
+    pretrain_parser.add_argument('--no_pretrain_synthetic', action='store_true')
+    pretrain_parser.add_argument('--pretrain_syn_ad_cap', type=int, default=-1)
+    pretrain_parser.add_argument('--pretrain_syn_mci_cap', type=int, default=-1)
+    pretrain_parser.add_argument('--pretrain_drop_edge_prob', type=float, default=0.2)
+    pretrain_parser.add_argument('--pretrain_temperature', type=float, default=0.5)
+    pretrain_parser.add_argument('--pretrain_quality_log_every', type=int, default=10)
+    pretrain_parser.add_argument('--phase4_quality_dir', type=str, default='./results_phase4_quality')
     
     # Finetune Command
     ft_parser = subparsers.add_parser("finetune", help="Phase 5: Fine-tune Multi-class GCN")
@@ -113,7 +122,18 @@ def main():
         run_filtering()
     elif args.command == "pretrain":
         print("--- Starting Phase 4: Contrastive Pre-Training ---")
-        train_contrastive(epochs=args.epochs)
+        train_contrastive(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            syn_dir=args.syn_dir,
+            use_synthetic=not args.no_pretrain_synthetic,
+            syn_ad_cap=args.pretrain_syn_ad_cap,
+            syn_mci_cap=args.pretrain_syn_mci_cap,
+            drop_edge_prob=args.pretrain_drop_edge_prob,
+            temperature=args.pretrain_temperature,
+            quality_log_every=args.pretrain_quality_log_every,
+            phase4_quality_dir=args.phase4_quality_dir,
+        )
     elif args.command == "finetune":
         print("--- Starting Phase 5: Fine-Tuning ---")
         train_finetune(

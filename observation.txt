@@ -389,3 +389,181 @@ Validation run:
 Conclusion:
 - Gate enforcement works technically, but current thresholds over-prune and destabilize class balance.
 - Before additional E2E, tune min_keep/thresholds (or class-specific fallback) to avoid AD/MCI collapse.
+
+[2026-03-22 Phase-3 Start]
+- Objective: stabilize Phase-3 filtering before moving to Phase-4/5.
+- Issue encountered: interactive login-node execution fails due missing GPU runtime (libcuda/libcusparse for DGL).
+- Resolution: created Slurm phase-3 runner `run_phase3_filter_3class.sh` using compute-node runtime.
+- Submitted runs:
+  * Run A (baseline): job 14774, thresholds min=0.50 max=0.98, seed=100.
+  * Run B (calibrated): job 14775, thresholds min=0.45 max=0.99, seed=100.
+- Next: compare retained AD/MCI counts, gate behavior, and pick stable thresholds for downstream probe.
+
+[2026-03-22 Phase-3 Results]
+- Run A (14774) threshold 0.50-0.98:
+  * AD retained: 93/103
+  * MCI retained: 152/166
+- Run B (14775) threshold 0.45-0.99:
+  * AD retained: 99/103
+  * MCI retained: 161/166
+- Run D stability repeat (14777) threshold 0.45-0.99:
+  * AD retained: 99/103
+  * MCI retained: 161/166
+  * Reproducibility of retention: stable (exact repeat)
+- Run C quick downstream probe (14776), finetune 15 epochs:
+  * Final Macro-F1: 0.4975
+  * Final OVR AUC: 0.7766
+  * Recall AD: 0.46, Recall MCI: 0.30
+  * Directional outcome: macro/AUC are promising for quick probe; AD recall improved vs some prior low runs but still below final target.
+- Added professor-suggestion-aligned embedding QA (14779):
+  * Script: src/phase3_embedding_check.py
+  * Artifact: results_guidance_3class/phase3_quality/phase3_tsne_real_vs_syn.png
+  * Metrics file: results_guidance_3class/phase3_quality/phase3_embedding_metrics.txt
+  * kNN purity (k=10): 0.4622
+  * Centroid distance real-vs-syn AD: 34.2884
+  * Centroid distance real-vs-syn MCI: 34.6192
+- Interpretation:
+  * Phase-3 filtering with 0.45-0.99 is currently preferred due higher minority retention and reproducible behavior.
+  * Embedding QA now exists; next calibration should target reducing real-vs-syn centroid gaps while preserving retention gains.
+
+[2026-03-23 Phase-2/3 Tuning Loop]
+- Added scripts for controlled tuning/evaluation:
+  * run_phase23_sweep_3class.sh
+  * run_phase23_single_eval.sh
+  * run_phase3_candidate_eval.sh
+  * run_phase3_embedding_check.sh
+  * src/phase3_embedding_check.py
+- Initial sweep with latent_mlp teacher (job 14880):
+  * baseline 2.0/2.0 -> purity 0.4645, dist AD/MCI 45.31/43.57, retained 115/175
+  * soft 1.6/1.3 -> purity 0.4614, dist 43.21/42.09, retained 115/175
+  * very_soft 1.3/1.1 -> purity 0.4501, dist 38.60/38.03, retained 115/175
+- Targeted reduced-count runs (jobs 14881/14882, N=103/166):
+  * n103_baseline 2.0/2.0 -> purity 0.4621, dist 45.19/43.47, retained 100/161
+  * n103_soft 1.6/1.3 -> purity 0.4542, dist 43.39/43.06, retained 100/161
+- Candidate historical snapshot evaluation (job 14884):
+  * seed100 -> retained 754/449, purity 0.5084, dist 64.46/64.89
+  * latest13906 -> retained 682/412, purity 0.5110, dist 55.85/55.13
+  * tmpcur -> retained 682/412, purity 0.5145, dist 59.25/58.54
+  * n103_baseline -> retained 100/161, purity 0.4621, dist 45.19/43.47
+  * n103_soft -> retained 100/161, purity 0.4542, dist 43.39/43.06
+- Critical stability check via quick probe finetune (15 epochs):
+  * tuned current set (job 14885) -> Macro-F1 0.4304, AUC 0.7672, AD recall 0.00 (bad regression)
+  * restored seed100 filtered snapshots (job 14886) -> Macro-F1 0.5006, AUC 0.7617, AD recall 0.54, MCI recall 0.20
+- Decision for stability:
+  * Keep canonical filtered synthetic set restored from seed100 snapshots:
+    - results_guidance_3class/filtered_synthetic_ad.bin <= filtered_synthetic_ad_seed_100.bin
+    - results_guidance_3class/filtered_synthetic_mci.bin <= filtered_synthetic_mci_seed_100.bin
+  * This avoids regression and keeps Macro-F1 above prior quick-probe baseline.
+- Ready to move to Phase-4 with stable Phase-2/3 artifacts.
+
+[2026-03-23 Phase-4 Eval Update]
+- Ran Phase-4 eval sweep via run_phase4_eval_3class.sh:
+  - Job 14887 (p4_baseline, P4_EPOCHS=80): AUC=0.8010, Macro-F1=0.4327, AD recall=0.15, MCI recall=0.16
+  - Job 14888 (p4_longer, P4_EPOCHS=110): AUC=0.7773, Macro-F1=0.4197, AD recall=0.15, MCI recall=0.15
+- Decision:
+  - Keep 80-epoch contrastive pretrain as preferred over 110 for current synthetic set.
+  - Phase-4 currently does NOT beat benchmark-level macro-F1; proceed with targeted Phase-4 tuning without changing Phase-2/3 filtered artifacts.
+- Notes:
+  - Same fixed seed=100 and same synthetic caps (AD=100, MCI=161) were used for fair comparison.
+
+[2026-03-23 Phase-4 Stabilization Plan + Execution]
+Objectives planned
+1) Prevent phase-4 representation drift from excessive synthetic volume during contrastive pretraining.
+2) Add phase-4 quality diagnostics (alignment/collapse trend) without changing old default behavior.
+3) Validate phase-4 impact quickly via short phase-5 probes before full E2E runs.
+
+Implemented changes
+- main_3class.py (pretrain command): added configurable options
+  --batch_size, --syn_dir, --no_pretrain_synthetic,
+  --pretrain_syn_ad_cap, --pretrain_syn_mci_cap,
+  --pretrain_drop_edge_prob, --pretrain_temperature,
+  --pretrain_quality_log_every, --phase4_quality_dir
+- src/train_contrastive_3class.py:
+  - Added optional synthetic caps for AD/MCI in phase-4 pretraining.
+  - Added configurable edge-drop probability and InfoNCE temperature.
+  - Added phase-4 quality metrics logging by epoch:
+    * contrastive loss
+    * positive-pair cosine similarity
+    * negative-pair cosine similarity
+    * embedding std (collapse indicator)
+  - Saves JSON metrics artifact at phase4_quality_dir/phase4_pretrain_metrics.json
+- run_phase4_eval_3class.sh:
+  - Added parameters for phase-4 synthetic caps and use_synthetic flag.
+  - Added summary outputs for AD/MCI recall in probe evaluation.
+
+Validation runs planned
+- Compare two phase-4 settings with same phase-5 probe setup:
+  A) phase-4 with capped synthetic pretrain (AD=100, MCI=161)
+  B) phase-4 real-only pretrain
+
+Validation runs executed
+- Job 14891 (p4_cap_match_v2):
+  P4 config: use synthetic, caps AD=100/MCI=161, epochs=80
+  Probe metrics: Macro-F1=0.5061, AUC=0.7833, AD recall=0.23, MCI recall=0.34
+- Job 14892 (p4_real_only_v2):
+  P4 config: no synthetic in pretrain, epochs=80
+  Probe metrics: Macro-F1=0.5001, AUC=0.7796, AD recall=0.46, MCI recall=0.26
+
+Phase-4 decision
+- Preferred overall macro performance: Job 14891 (Macro-F1 best among phase-4 probes).
+- Minority recall tradeoff observed:
+  - real-only pretrain improved AD recall
+  - capped synthetic pretrain improved MCI recall and best Macro-F1
+- For next phase-5 tuning, keep 14891 pretrain style as default candidate and treat AD recall as explicit tuning target in phase-5.
+
+[2026-03-23 Phase-5 Initial Tuning Results]
+Context
+- Used preferred Phase-4 pretrain checkpoint from Job 14891:
+  job_logs/phase4_p4_cap_match_v2_20260323_160723/gcn_pretrained_3class_p4_cap_match_v2.pth
+- Ran targeted fine-tune sweep with fixed seed=100 and unfreeze=1.
+
+Sweep job 14897 (4 configs)
+- ad100/mci161, inverse, ls=0.0: AUC=0.7877, Macro-F1=0.4608, AD_R=0.00, MCI_R=0.68
+- ad100/mci161, sqrt_inverse, ls=0.0: AUC=0.7887, Macro-F1=0.3809, AD_R=0.00, MCI_R=0.22
+- ad120/mci161, inverse, ls=0.0: AUC=0.7859, Macro-F1=0.5341, AD_R=0.23, MCI_R=0.58  <-- best Macro-F1 so far in this phase
+- ad120/mci161, sqrt_inverse, ls=0.0: AUC=0.7881, Macro-F1=0.4725, AD_R=0.08, MCI_R=0.53
+
+Follow-up jobs
+- Job 14898 (ad120/mci161, inverse, ls=0.05): AUC=0.7593, Macro-F1=0.5328, AD_R=0.23, MCI_R=0.39
+- Job 14899 (ad140/mci161, inverse, ls=0.0): AUC=0.7956, Macro-F1=0.4619, AD_R=0.00, MCI_R=0.65
+
+Current best operational phase-5 setting
+- max_syn_ad=120
+- max_syn_mci=161
+- loss_class_weight_mode=inverse
+- label_smoothing=0.0
+- unfreeze=True
+
+Interpretation
+- Increasing AD cap from 100 -> 120 improved Macro-F1 substantially and recovered non-zero AD recall.
+- Too aggressive AD cap (140) collapsed AD recall to 0 again despite decent AUC.
+- sqrt_inverse weights did not help macro-F1 in this window.
+
+[2026-03-23 Tuned Frozen Run]
+- Updated run_frozen_pipeline_3class.sh to support configurable Phase-4/5 knobs via environment variables while preserving old default behavior.
+- Submitted tuned frozen run: Job 14900
+  Config:
+  - Seed=100
+  - Phase4: epochs=80, use_syn=1, pretrain syn caps AD=100/MCI=161, drop_edge=0.2, temp=0.5
+  - Phase5: epochs=30, unfreeze=1, max_syn_ad=120, max_syn_mci=161, loss_class_weight_mode=inverse, label_smoothing=0.0
+  Result:
+  - Final AUC=0.7877
+  - Final Macro-F1=0.5139
+  - AD recall=0.62
+  - MCI recall=0.24
+- Interpretation:
+  - Strong AD recall recovery in frozen full run.
+  - Macro-F1 remains below target 0.55 benchmark objective; current limiting factor is MCI recall in full frozen setting.
+
+[2026-03-23 Reconnect + Continued Tuning]
+- Reconnected and resumed action plan.
+- Completed stable phase5-only sweep job 14910 (fixed pretrain + fixed synthetic snapshots).
+  - Best Macro-F1 in 14910: 0.5609 at ad120/mci161/inverse/ls0.03 (AD recall 0.31, MCI recall 0.39)
+  - Only AD>=0.50 in 14910: ad130/mci200/inverse/ls0.03 (AD recall 0.54) but Macro-F1=0.3989.
+- Ran targeted micro-sweep job 14948 around AD-heavy settings:
+  - ad150/mci140/effective/ls0.02 => Macro-F1=0.5314, AUC=0.7926, AD recall=0.62, MCI recall=0.36.
+- Ran 2 repeats for this candidate:
+  - job 14949 => Macro-F1=0.5602, AUC=0.7923, AD recall=0.46, MCI recall=0.46
+  - job 14950 => Macro-F1=0.5412, AUC=0.7910, AD recall=0.46, MCI recall=0.45
+- Conclusion for now:
+  - Macro-F1 improvements are sustained (0.54-0.56 range), but AD recall is not consistently >=0.50 in repeats.
