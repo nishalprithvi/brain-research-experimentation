@@ -36,6 +36,10 @@ datasets/
 # --- Results, Logs, & Reports ---
 results/
 results*/
+results_guidance/
+results_guidance_3class/
+results_phase1_quality/
+results_phase4_quality/
 job_logs/
 metrics_graphs/
 logs/
@@ -43,6 +47,9 @@ logs/
 *.out
 *.err
 *results*.txt
+
+# Generated report artifacts (keep sources, ignore compiled PDFs)
+reports/*.pdf
 
 # --- Notebooks ---
 .ipynb_checkpoints/
@@ -60,6 +67,7 @@ logs/
 # --- Large Binaries & Miscellaneous ---
 tectonic/
 tectonic
+*.tar.gz
 
 # --- Explicitly Keep Critical Files ---
 !test_indices.npy
@@ -67,9 +75,6 @@ tectonic
 !requirements.txt
 !readme.md
 project_documentation.tex
-project_documentation.pdf
 phase12_status_report.pdf
 # suggestions.txt
 observation.txt
-
-phase12_status_report.pdf
