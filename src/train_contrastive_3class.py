@@ -120,8 +120,12 @@ def train_contrastive(
     print(f"Using device: {device}")
 
     print("Loading Real Data...")
-    glist_real, _ = load_adni_dgl_with_labels(data_dir="./data")
+    glist_real_all, labels_real = load_adni_dgl_with_labels(data_dir="./data")
+    valid_mask = labels_real != -1
+    dropped_invalid = int((~valid_mask).sum())
+    glist_real = [glist_real_all[i] for i in range(len(glist_real_all)) if valid_mask[i]]
     glist_real = _sanitize_graphs(glist_real)
+    print(f"[Phase4 Data] dropped_invalid_real={dropped_invalid}")
 
     glist_syn = []
     syn_stats = {"ad_loaded": 0, "ad_used": 0, "mci_loaded": 0, "mci_used": 0}

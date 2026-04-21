@@ -579,6 +579,30 @@ def _phase1_stability_summary(vae_metrics, diffusion_metrics, teacher_metrics):
     return out
 
 
+def _matrix_density(arr):
+    return float(np.mean(np.abs(arr) > 1e-8))
+
+
+def _sparsify_topk_batch(mats, keep_ratio=1.0):
+    if keep_ratio >= 1.0:
+        return mats
+    keep_ratio = max(float(keep_ratio), 0.01)
+    out = np.zeros_like(mats)
+    for i in range(mats.shape[0]):
+        m = mats[i]
+        flat = np.abs(m).reshape(-1)
+        k = max(1, int(np.ceil(keep_ratio * flat.size)))
+        if k >= flat.size:
+            out[i] = m
+            continue
+        th = np.partition(flat, flat.size - k)[flat.size - k]
+        mask = (np.abs(m) >= th).astype(m.dtype)
+        s = m * mask
+        s = 0.5 * (s + s.T)
+        out[i] = s
+    return out
+
+
 def run_training(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -591,6 +615,18 @@ def run_training(args):
         print(f"[DataLoader] Filtering out {num_invalid} samples with invalid label (-1).")
         matrices = matrices[valid_mask]
         labels = labels[valid_mask]
+
+    density_before = _matrix_density(matrices)
+    if args.phase1_sparse_mode == "topk" and args.phase1_sparse_keep_ratio < 1.0:
+        matrices = _sparsify_topk_batch(matrices, keep_ratio=args.phase1_sparse_keep_ratio)
+        density_after = _matrix_density(matrices)
+        print(
+            f"[Phase-1 Sparsify] mode=topk keep_ratio={args.phase1_sparse_keep_ratio} "
+            f"density_before={density_before:.4f} density_after={density_after:.4f}"
+        )
+    else:
+        density_after = density_before
+        print(f"[Phase-1 Sparsify] mode=none density={density_before:.4f}")
 
     splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, val_idx = next(splitter.split(matrices, labels))
@@ -630,6 +666,10 @@ def run_training(args):
         "num_train": int(len(train_idx)),
         "num_val": int(len(val_idx)),
         "quality_dir": quality_dir,
+        "phase1_sparse_mode": args.phase1_sparse_mode,
+        "phase1_sparse_keep_ratio": float(args.phase1_sparse_keep_ratio),
+        "matrix_density_before": float(density_before),
+        "matrix_density_after": float(density_after),
     }
 
     with open(os.path.join(quality_dir, "phase1_run_meta.json"), "w") as f:
@@ -745,6 +785,8 @@ def main():
     parser.add_argument("--teacher_max_class_weight", type=float, default=0.0)
     parser.add_argument("--teacher_collapse_reg", type=float, default=0.05)
     parser.add_argument("--teacher_early_stop_patience", type=int, default=20)
+    parser.add_argument("--phase1_sparse_mode", type=str, default="none", choices=["none", "topk"])
+    parser.add_argument("--phase1_sparse_keep_ratio", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=100)
     args = parser.parse_args()
 
